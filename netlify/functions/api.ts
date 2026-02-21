@@ -17,6 +17,7 @@ const approvalSchema = z.object({ actionId: z.string() });
 const LEASE_MS = 30_000;
 const now = () => new Date();
 const nowIso = () => now().toISOString();
+const err = (statusCode: number, message: string) => ({ statusCode, body: JSON.stringify({ error: message }), headers: { 'Content-Type': 'application/json' } });
 
 function isLeaseExpired(task: Task): boolean {
   return !!task.lease && new Date(task.lease.expiresAt).getTime() <= Date.now();
@@ -43,6 +44,7 @@ function validateLease(task: Task, leaseToken: string): boolean {
 export const handler: Handler = async (event) => {
   const authError = ensureAuth(event.headers as Record<string, string | undefined>);
   if (authError) return authError;
+  if (!process.env.DATABASE_URL) return err(500, 'DATABASE_URL is not set');
 
   const path = (event.path || '').replace(/^.*\/api/, '');
   const method = event.httpMethod;
@@ -51,11 +53,11 @@ export const handler: Handler = async (event) => {
 
   if (path === '/watch/latest_screenshot' && method === 'POST') {
     const taskId = qs.get('taskId');
-    if (!taskId) return { statusCode: 400, body: 'taskId required' };
+    if (!taskId) return err(400, 'taskId required');
     const bytes = event.body
       ? (event.isBase64Encoded ? Buffer.from(event.body, 'base64') : Buffer.from(event.body, 'binary'))
       : Buffer.alloc(0);
-    if (!bytes.length) return { statusCode: 400, body: 'image required' };
+    if (!bytes.length) return err(400, 'image required');
     await query(
       `insert into task_watch_latest(task_id, image_jpeg, updated_at)
        values ($1, $2, now())
@@ -67,9 +69,9 @@ export const handler: Handler = async (event) => {
 
   if (path === '/watch/latest_screenshot' && method === 'GET') {
     const taskId = qs.get('taskId');
-    if (!taskId) return { statusCode: 400, body: 'taskId required' };
+    if (!taskId) return err(400, 'taskId required');
     const res = await query<{ image_jpeg: Buffer }>('select image_jpeg from task_watch_latest where task_id=$1', [taskId]);
-    if (!res.rows[0]) return { statusCode: 404, body: 'not found' };
+    if (!res.rows[0]) return err(404, 'not found');
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' },
@@ -101,14 +103,14 @@ export const handler: Handler = async (event) => {
     const taskId = taskMatch[1];
     const action = taskMatch[2];
     const task = state.tasks.find((t) => t.id === taskId);
-    if (!task) return { statusCode: 404, body: 'not found' };
+    if (!task) return err(404, 'not found');
     if (!action && method === 'GET') return { statusCode: 200, body: JSON.stringify(task) };
 
     if (action === 'claim' && method === 'POST') {
       const body = claimSchema.parse(parseBody());
       const resumeApproved = task.pendingActions.some((a) => a.type === 'RESUME_AFTER_MANUAL' && a.status === 'APPROVED');
       const claimable = task.status === 'PENDING' || (task.status === 'NEEDS_MANUAL' && resumeApproved);
-      if (!claimable) return { statusCode: 409, body: 'task is not claimable' };
+      if (!claimable) return err(409, 'task is not claimable');
       task.status = 'RUNNING';
       task.lease = leaseFor(body.runnerId);
       task.updatedAt = nowIso();
@@ -132,7 +134,7 @@ export const handler: Handler = async (event) => {
 
     if (action === 'heartbeat' && method === 'POST') {
       const body = heartbeatSchema.parse(parseBody());
-      if (!validateLease(task, body.leaseToken)) return { statusCode: 409, body: 'invalid lease token' };
+      if (!validateLease(task, body.leaseToken)) return err(409, 'invalid lease token');
       task.lease = { ...(task.lease as NonNullable<Task['lease']>), expiresAt: new Date(Date.now() + LEASE_MS).toISOString() };
       task.updatedAt = nowIso();
       await saveState(state);
@@ -141,7 +143,7 @@ export const handler: Handler = async (event) => {
 
     if (action === 'complete' && method === 'POST') {
       const body = taskUpdateSchema.extend({ result: z.unknown().optional() }).parse(parseBody());
-      if (!validateLease(task, body.leaseToken)) return { statusCode: 409, body: 'invalid lease token' };
+      if (!validateLease(task, body.leaseToken)) return err(409, 'invalid lease token');
       task.status = 'COMPLETED';
       task.result = body.result;
       task.lease = undefined;
@@ -152,7 +154,7 @@ export const handler: Handler = async (event) => {
 
     if (action === 'fail' && method === 'POST') {
       const body = taskUpdateSchema.extend({ error: z.string(), needsManual: z.boolean().optional() }).parse(parseBody());
-      if (!validateLease(task, body.leaseToken)) return { statusCode: 409, body: 'invalid lease token' };
+      if (!validateLease(task, body.leaseToken)) return err(409, 'invalid lease token');
       task.status = body.needsManual ? 'NEEDS_MANUAL' : 'FAILED';
       task.error = body.error;
       task.lease = undefined;
@@ -167,7 +169,7 @@ export const handler: Handler = async (event) => {
     if ((action === 'approve' || action === 'deny') && method === 'POST') {
       const body = approvalSchema.parse(parseBody());
       const pending = task.pendingActions.find((a) => a.id === body.actionId);
-      if (!pending) return { statusCode: 404, body: 'action not found' };
+      if (!pending) return err(404, 'action not found');
       pending.status = action === 'approve' ? 'APPROVED' : 'DENIED';
       if (pending.type === 'RESUME_AFTER_MANUAL') {
         task.status = pending.status === 'APPROVED' ? 'PENDING' : 'FAILED';

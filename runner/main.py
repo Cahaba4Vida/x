@@ -25,6 +25,27 @@ def heartbeat_loop(api: CockpitClient, task_id: str, lease_token: str, stop_even
         stop_event.wait(15)
 
 
+def preflight_self_check(api: CockpitClient, local_state: LocalState):
+    runner_id = api.runner_id
+    watch_cfg = {}
+    try:
+        import json
+        from pathlib import Path
+        cfg_path = Path('runner/runner_config.json')
+        if not cfg_path.exists():
+            cfg_path = Path('runner/config/runner_config.example.json')
+        if cfg_path.exists():
+            watch_cfg = json.loads(cfg_path.read_text(encoding='utf-8')).get('watch_mode', {})
+    except Exception:
+        watch_cfg = {}
+    print(f"[preflight] cockpit={api.base_url} runner_id={runner_id} watch_enabled={watch_cfg.get('enabled', True)} watch_interval_seconds={watch_cfg.get('interval_seconds', 5)}")
+    try:
+        api.list_tasks(status='PENDING')
+        print('[preflight] cockpit auth check: ok')
+    except Exception as exc:
+        print(f'[preflight] cockpit auth check failed: {exc}')
+
+
 def execute_with_retries(fn, retries: int = 3):
     delay = 1.0
     for attempt in range(1, retries + 1):
@@ -41,6 +62,7 @@ def run():
     load_dotenv('runner/.env')
     api = CockpitClient()
     local_state = LocalState()
+    preflight_self_check(api, local_state)
     registry = ToolRegistry()
     for module in [gmail_tool, instagram_tool, netlify_app_insights_tool, playwright_tool]:
         registry.register(module)

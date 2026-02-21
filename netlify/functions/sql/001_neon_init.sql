@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   result JSONB,
   error TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
 CREATE TABLE IF NOT EXISTS task_logs (
   id BIGSERIAL PRIMARY KEY,
