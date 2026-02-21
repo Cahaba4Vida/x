@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@netlify/blobs": "^7.0.0",
     "zod": "^3.23.8",
     "uuid": "^11.0.3",
-    "@netlify/functions": "^2.8.2"
+    "@netlify/functions": "^2.8.2",
+    "pg": "^8.13.1"
   }
 }

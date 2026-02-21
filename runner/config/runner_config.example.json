@@ -13,13 +13,31 @@
         "submit_selector": "button[type=submit]"
       },
       "insights": [
-        {"name": "activeUsers", "selector": "[data-testid=active-users]", "type": "text"}
+        {
+          "name": "activeUsers",
+          "selector": "[data-testid=active-users]",
+          "type": "text"
+        }
       ],
       "smoke": [
-        {"step": "goto", "url": "/dashboard"},
-        {"step": "expectVisible", "selector": "[data-testid=dashboard-root]"}
+        {
+          "step": "goto",
+          "url": "/dashboard"
+        },
+        {
+          "step": "expectVisible",
+          "selector": "[data-testid=dashboard-root]"
+        }
       ]
     }
   ],
-  "instagram": {"use_persistent_profile": true, "browser_channel": "chrome", "headless": false}
+  "instagram": {
+    "use_persistent_profile": true,
+    "browser_channel": "chrome",
+    "headless": false
+  },
+  "watch_mode": {
+    "enabled": true,
+    "interval_seconds": 5
+  }
 }
