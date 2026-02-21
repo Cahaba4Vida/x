@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+__pycache__/
+*.pyc
+runner/.env
+runner/oauth_token.json
+runner/local_data/
+dist/
+playwright-report/
