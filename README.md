@@ -69,7 +69,8 @@ npm run dev
 
 1. Connect repo to Netlify.
 2. Set env vars: `ADMIN_TOKEN`, `DATABASE_URL`.
-3. Deploy with `netlify.toml` config.
+3. Apply Neon schema once: `psql "$DATABASE_URL" -f netlify/db/schema.sql`.
+4. Deploy with `netlify.toml` config.
 
 ### 3) Runner setup (Windows)
 
@@ -138,7 +139,7 @@ If either `ADMIN_TOKEN` or `DATABASE_URL` is missing, the API returns a clear 50
 Run the SQL migration against Neon before starting the runner:
 
 ```bash
-psql "$DATABASE_URL" -f netlify/functions/sql/001_neon_init.sql
+psql "$DATABASE_URL" -f netlify/db/schema.sql
 ```
 
 ## Preflight Test Plan
@@ -146,7 +147,7 @@ psql "$DATABASE_URL" -f netlify/functions/sql/001_neon_init.sql
 1. **Apply Neon schema**
 
 ```bash
-psql "$DATABASE_URL" -f netlify/functions/sql/001_neon_init.sql
+psql "$DATABASE_URL" -f netlify/db/schema.sql
 ```
 
 2. **Cockpit build check**
@@ -190,4 +191,4 @@ d) Verify task completes and end-of-run artifacts are listed in Artifacts sectio
 
 - Persistence is Neon Postgres (`DATABASE_URL`) only.
 - Artifact metadata is stored in `task_artifacts`; watch thumbnails are latest-only bytes in `task_watch_latest`.
-- Artifact payloads should still be downscaled to avoid function payload limits.
+- Artifacts for WEBAPP tasks are stored as metadata only; live screenshots are served from `task_watch_latest`.

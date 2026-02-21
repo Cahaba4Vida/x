@@ -2,6 +2,7 @@ import { Handler } from '@netlify/functions';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ensureAuth } from './lib/auth';
+import { json } from './lib/http';
 import { loadState, saveState } from './lib/store';
 import { PendingAction, Task } from './lib/types';
 import { query } from './lib/db';
@@ -44,7 +45,9 @@ function validateLease(task: Task, leaseToken: string): boolean {
 export const handler: Handler = async (event) => {
   const authError = ensureAuth(event.headers as Record<string, string | undefined>);
   if (authError) return authError;
-  if (!process.env.DATABASE_URL) return err(500, 'DATABASE_URL is not set');
+  if (!process.env.DATABASE_URL) {
+    return json(500, { error: 'server_misconfigured', message: 'DATABASE_URL is not set' });
+  }
 
   const path = (event.path || '').replace(/^.*\/api/, '');
   const method = event.httpMethod;

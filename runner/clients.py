@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 import time
@@ -90,27 +89,19 @@ class WebAppClient:
             page.wait_for_load_state('networkidle', timeout=30000)
         self._log(logger, 'info', 'webapp.login.success', {'appId': app['id']})
 
-    def _encode_screenshot_artifact(self, app_id: str, screenshot_bytes: bytes, note: str = '') -> dict[str, Any]:
-        mime = 'image/png'
-        data = screenshot_bytes
-        if len(data) > 1_000_000:
-            mime = 'image/jpeg'
+    def _artifact_metadata(self, app_id: str, note: str = '') -> dict[str, Any]:
         return {
             'id': f"{app_id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
             'type': 'screenshot',
-            'mime': mime,
+            'mime': 'image/jpeg',
             'createdAt': datetime.utcnow().isoformat(),
-            'dataBase64': base64.b64encode(data).decode('ascii'),
             'note': note,
+            'storage': 'watch_latest_only',
         }
 
     def _capture_artifact(self, page, app_id: str, note: str = '') -> dict[str, Any]:
-        shot = page.screenshot(full_page=True, type='png')
-        if len(shot) > 1_000_000:
-            shot = page.screenshot(full_page=False, type='jpeg', quality=60)
-            if len(shot) > 1_000_000:
-                shot = page.screenshot(full_page=False, type='jpeg', quality=35)
-        return self._encode_screenshot_artifact(app_id, shot, note)
+        page.screenshot(type='jpeg', quality=40, full_page=False)
+        return self._artifact_metadata(app_id, note)
 
     def _capture_watch_thumbnail(self, page) -> bytes:
         return page.screenshot(type='jpeg', quality=40, full_page=False)
