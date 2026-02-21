@@ -30,7 +30,7 @@ export const api = {
   listTasks: (status?: string) => request<{ tasks: Task[] }>(`/tasks${status ? `?status=${status}` : ''}`),
   createTask: (payload: { type: string; args: Record<string, unknown> }) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
   getTask: (id: string) => request<Task>(`/tasks/${id}`),
-  getLogs: (taskId: string) => request<{ logs: Array<Record<string, unknown>> }>(`/logs?taskId=${taskId}`),
+  getLogs: (taskId: string, sinceId = 0, limit = 200) => request<{ logs: Array<Record<string, unknown>> }>(`/logs?taskId=${taskId}&sinceId=${sinceId}&limit=${limit}`),
   getArtifacts: (taskId: string) => request<{ artifacts: Array<Record<string, unknown>> }>(`/artifacts?taskId=${taskId}`),
   approve: (taskId: string, actionId: string) => request(`/tasks/${taskId}/approve`, { method: 'POST', body: JSON.stringify({ actionId }) }),
   deny: (taskId: string, actionId: string) => request(`/tasks/${taskId}/deny`, { method: 'POST', body: JSON.stringify({ actionId }) }),

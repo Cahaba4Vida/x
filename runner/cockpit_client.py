@@ -62,3 +62,10 @@ class CockpitClient:
 
     def set_digest(self, digest):
         self.http.post(f'{self.base_url}/api/email/digest', json=digest, headers=self._headers()).raise_for_status()
+
+    def upload_watch_latest_screenshot(self, task_id: str, jpeg_bytes: bytes):
+        self.http.post(
+            f'{self.base_url}/api/watch/latest_screenshot?taskId={task_id}',
+            content=jpeg_bytes,
+            headers={**self._headers(), 'Content-Type': 'image/jpeg'}
+        ).raise_for_status()
