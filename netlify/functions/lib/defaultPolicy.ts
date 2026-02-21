@@ -1,0 +1,23 @@
+export const defaultPolicy = {
+  limits: {
+    max_tool_calls_per_task: 20,
+    max_llm_calls_per_task: 8,
+    max_runtime_seconds_per_task: 600,
+    max_instagram_actions_per_hour: 30,
+    max_comment_replies_per_hour: 20,
+    max_dm_replies_per_hour: 20
+  },
+  approvals: {
+    'instagram.post_feed': 'ALWAYS',
+    'gmail.send': 'ALWAYS'
+  },
+  gmail: {
+    auto_archive: { enabled: true, newsletter_heuristics: true, promotions_heuristics: true },
+    important_rules: { vip_senders: [], keywords: ['invoice', 'payment', 'receipt', 'verification', 'security alert', 'password', 'urgent'], deadline_days: 7 }
+  },
+  instagram: {
+    blocklist_phrases: ['crypto giveaway', 'send nudes', 'hate speech placeholder'],
+    reply_style: { tone: 'casual', max_length_chars: 500, no_personal_data: true }
+  },
+  webapps: { default_timeout_ms: 30000 }
+};

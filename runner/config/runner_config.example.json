@@ -1,0 +1,25 @@
+{
+  "apps": [
+    {
+      "id": "myapp1",
+      "name": "My Netlify App 1",
+      "base_url": "https://example.netlify.app",
+      "login": {
+        "method": "form",
+        "username_env": "APP1_USER",
+        "password_env": "APP1_PASS",
+        "username_selector": "input[name=email]",
+        "password_selector": "input[name=password]",
+        "submit_selector": "button[type=submit]"
+      },
+      "insights": [
+        {"name": "activeUsers", "selector": "[data-testid=active-users]", "type": "text"}
+      ],
+      "smoke": [
+        {"step": "goto", "url": "/dashboard"},
+        {"step": "expectVisible", "selector": "[data-testid=dashboard-root]"}
+      ]
+    }
+  ],
+  "instagram": {"use_persistent_profile": true, "browser_channel": "chrome", "headless": false}
+}
