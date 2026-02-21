@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ensureAuth } from './lib/auth';
 import { loadState, saveState } from './lib/store';
 import { PendingAction, Task } from './lib/types';
+import { query } from './lib/db';
 
 const createTaskSchema = z.object({ type: z.string(), args: z.record(z.unknown()).default({}) });
 const toolsUpdateSchema = z.object({ tools: z.record(z.boolean()) });
@@ -46,9 +47,38 @@ export const handler: Handler = async (event) => {
   const path = (event.path || '').replace(/^.*\/api/, '');
   const method = event.httpMethod;
   const qs = new URLSearchParams(event.queryStringParameters as Record<string, string>);
-  const state = await loadState();
   const parseBody = () => (event.body ? JSON.parse(event.body) : {});
 
+  if (path === '/watch/latest_screenshot' && method === 'POST') {
+    const taskId = qs.get('taskId');
+    if (!taskId) return { statusCode: 400, body: 'taskId required' };
+    const bytes = event.body
+      ? (event.isBase64Encoded ? Buffer.from(event.body, 'base64') : Buffer.from(event.body, 'binary'))
+      : Buffer.alloc(0);
+    if (!bytes.length) return { statusCode: 400, body: 'image required' };
+    await query(
+      `insert into task_watch_latest(task_id, image_jpeg, updated_at)
+       values ($1, $2, now())
+       on conflict (task_id) do update set image_jpeg = excluded.image_jpeg, updated_at = now()`,
+      [taskId, bytes]
+    );
+    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+  }
+
+  if (path === '/watch/latest_screenshot' && method === 'GET') {
+    const taskId = qs.get('taskId');
+    if (!taskId) return { statusCode: 400, body: 'taskId required' };
+    const res = await query<{ image_jpeg: Buffer }>('select image_jpeg from task_watch_latest where task_id=$1', [taskId]);
+    if (!res.rows[0]) return { statusCode: 404, body: 'not found' };
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' },
+      body: Buffer.from(res.rows[0].image_jpeg).toString('base64'),
+      isBase64Encoded: true
+    };
+  }
+
+  const state = await loadState();
   releaseExpiredLeases(state.tasks);
 
   if (path === '/tasks' && method === 'GET') {
@@ -91,6 +121,11 @@ export const handler: Handler = async (event) => {
       task.pendingActions.push(body);
       task.status = task.status === 'NEEDS_MANUAL' ? 'NEEDS_MANUAL' : 'WAITING_APPROVAL';
       task.updatedAt = nowIso();
+      await query(
+        `insert into task_approvals(task_id, action_id, action_type, status, payload)
+         values($1,$2,$3,$4,$5::jsonb)`,
+        [task.id, body.id, body.type, body.status, JSON.stringify(body.payload || {})]
+      );
       await saveState(state);
       return { statusCode: 200, body: JSON.stringify({ ok: true }) };
     }
@@ -140,31 +175,75 @@ export const handler: Handler = async (event) => {
         task.status = task.status === 'NEEDS_MANUAL' ? 'NEEDS_MANUAL' : 'RUNNING';
       }
       task.updatedAt = nowIso();
+      await query(
+        `update task_approvals set status=$1, updated_at=now() where task_id=$2 and action_id=$3`,
+        [pending.status, task.id, pending.id]
+      );
       await saveState(state);
       return { statusCode: 200, body: JSON.stringify({ ok: true }) };
     }
   }
 
   if (path === '/logs' && method === 'POST') {
-    state.logs.push(parseBody());
-    await saveState(state);
-    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+    const entry = parseBody();
+    const taskId = String(entry.taskId || '');
+    const level = entry.level ? String(entry.level) : null;
+    const eventName = entry.event ? String(entry.event) : null;
+    const payload = entry.payload ?? {};
+    const ts = entry.ts ? new Date(String(entry.ts)).toISOString() : nowIso();
+    const inserted = await query<{ id: number }>(
+      `insert into task_logs(task_id, ts, level, event, payload, raw)
+       values($1,$2::timestamptz,$3,$4,$5::jsonb,$6::jsonb)
+       returning id`,
+      [taskId, ts, level, eventName, JSON.stringify(payload), JSON.stringify(entry)]
+    );
+    return { statusCode: 200, body: JSON.stringify({ ok: true, id: inserted.rows[0].id }) };
   }
 
   if (path === '/logs' && method === 'GET') {
     const taskId = qs.get('taskId');
-    return { statusCode: 200, body: JSON.stringify({ logs: state.logs.filter((l) => !taskId || l.taskId === taskId) }) };
+    const sinceId = Number(qs.get('sinceId') || '0');
+    const limit = Math.min(Number(qs.get('limit') || '200'), 1000);
+    if (!taskId) return { statusCode: 200, body: JSON.stringify({ logs: [] }) };
+    const logsRes = await query(
+      `select id, task_id as "taskId", ts, level, event, payload, raw
+       from task_logs
+       where task_id=$1 and id > $2
+       order by id asc
+       limit $3`,
+      [taskId, sinceId, limit]
+    );
+    const logs = logsRes.rows.map((r: any) => ({ id: r.id, taskId: r.taskId, ts: r.ts, level: r.level, event: r.event, payload: r.payload, ...r.raw }));
+    return { statusCode: 200, body: JSON.stringify({ logs }) };
   }
 
   if (path === '/artifacts' && method === 'POST') {
-    state.artifacts.push(parseBody());
-    await saveState(state);
-    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+    const body = parseBody();
+    const b64 = typeof body.dataBase64 === 'string' ? body.dataBase64 : '';
+    if (b64 && b64.length > 200 * 1024) {
+      return { statusCode: 413, body: JSON.stringify({ error: 'artifact dataBase64 exceeds 200KB' }) };
+    }
+    const metadata = { ...body };
+    delete (metadata as any).dataBase64;
+    const inserted = await query<{ id: number }>(
+      `insert into task_artifacts(task_id, artifact_id, type, mime, note, metadata)
+       values($1,$2,$3,$4,$5,$6::jsonb)
+       returning id`,
+      [String(body.taskId || ''), body.id ? String(body.id) : null, body.type ? String(body.type) : null, body.mime ? String(body.mime) : null, body.note ? String(body.note) : null, JSON.stringify(metadata)]
+    );
+    return { statusCode: 200, body: JSON.stringify({ ok: true, id: inserted.rows[0].id }) };
   }
 
   if (path === '/artifacts' && method === 'GET') {
     const taskId = qs.get('taskId');
-    return { statusCode: 200, body: JSON.stringify({ artifacts: state.artifacts.filter((a) => !taskId || a.taskId === taskId) }) };
+    if (!taskId) return { statusCode: 200, body: JSON.stringify({ artifacts: [] }) };
+    const res = await query(
+      `select id, task_id as "taskId", artifact_id as "artifactId", type, mime, note, created_at as "createdAt", metadata
+       from task_artifacts where task_id=$1 order by id desc`,
+      [taskId]
+    );
+    const artifacts = res.rows.map((r: any) => ({ id: r.id, taskId: r.taskId, artifactId: r.artifactId, type: r.type, mime: r.mime, note: r.note, createdAt: r.createdAt, ...r.metadata }));
+    return { statusCode: 200, body: JSON.stringify({ artifacts }) };
   }
 
   if (path === '/policy' && method === 'GET') return { statusCode: 200, body: JSON.stringify(state.policy) };
