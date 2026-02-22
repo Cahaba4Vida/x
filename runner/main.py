@@ -41,7 +41,8 @@ def preflight_self_check(api: CockpitClient, local_state: LocalState):
     print(f"[preflight] cockpit={api.base_url} runner_id={runner_id} watch_enabled={watch_cfg.get('enabled', True)} watch_interval_seconds={watch_cfg.get('interval_seconds', 5)}")
     try:
         api.list_tasks(status='PENDING')
-        print('[preflight] cockpit auth check: ok')
+        apps = api.list_apps()
+        print(f'[preflight] cockpit auth check: ok; apps={len(apps)}')
     except Exception as exc:
         print(f'[preflight] cockpit auth check failed: {exc}')
 

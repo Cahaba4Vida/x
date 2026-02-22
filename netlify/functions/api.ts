@@ -7,13 +7,47 @@ import { loadState, saveState } from './lib/store';
 import { PendingAction, Task } from './lib/types';
 import { query } from './lib/db';
 
-const createTaskSchema = z.object({ type: z.string(), args: z.record(z.unknown()).default({}) });
+const ENV_NAME_REGEX = /^[A-Z_][A-Z0-9_]*$/;
+
+const createTaskSchema = z.object({
+  type: z.string(),
+  args: z.record(z.unknown()).default({})
+}).superRefine((value, ctx) => {
+  if (value.type === 'WEBAPP_INSTRUCTION') {
+    const parsed = z.object({ appId: z.string().min(1), instructionText: z.string().min(1) }).safeParse(value.args);
+    if (!parsed.success) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'WEBAPP_INSTRUCTION args must include appId and instructionText' });
+    }
+  }
+});
+
+const appSchema = z.object({ name: z.string().min(1), base_url: z.string().url() });
+const appAuthSchema = z.object({
+  auth_type: z.enum(['none', 'token', 'username_password']),
+  token_env: z.string().nullable().optional(),
+  username_env: z.string().nullable().optional(),
+  password_env: z.string().nullable().optional(),
+  two_fa_notes: z.string().nullable().optional(),
+  enabled: z.boolean().optional()
+});
 const toolsUpdateSchema = z.object({ tools: z.record(z.boolean()) });
 const heartbeatSchema = z.object({ leaseToken: z.string() });
 const taskUpdateSchema = z.object({ leaseToken: z.string() });
 const claimSchema = z.object({ runnerId: z.string() });
 const pendingActionSchema = z.object({ id: z.string(), type: z.string(), payload: z.record(z.unknown()), status: z.enum(['PENDING', 'APPROVED', 'DENIED']).default('PENDING') });
 const approvalSchema = z.object({ actionId: z.string() });
+const stepSchema = z.object({
+  task_id: z.string().min(1),
+  kind: z.string().min(1),
+  message: z.string().min(1),
+  data: z.record(z.unknown()).optional().default({})
+});
+const approvalCreateSchema = z.object({
+  task_id: z.string().min(1),
+  reason: z.string().min(1),
+  proposed_actions: z.array(z.unknown()).optional().default([]),
+  status: z.enum(['pending', 'approved', 'denied']).optional().default('pending')
+});
 
 const LEASE_MS = 30_000;
 const now = () => new Date();
@@ -40,6 +74,13 @@ function leaseFor(runnerId: string) {
 
 function validateLease(task: Task, leaseToken: string): boolean {
   return Boolean(task.lease && task.lease.token === leaseToken && !isLeaseExpired(task));
+}
+
+function validateEnvName(name: string | null | undefined) {
+  if (!name) return;
+  if (!ENV_NAME_REGEX.test(name)) {
+    throw new Error(`Invalid env var name: ${name}`);
+  }
 }
 
 export const handler: Handler = async (event) => {
@@ -83,6 +124,132 @@ export const handler: Handler = async (event) => {
     };
   }
 
+  // apps (first-class DB)
+  if (path === '/apps' && method === 'GET') {
+    const res = await query(`
+      select a.id, a.name, a.base_url, a.created_at, a.updated_at,
+             coalesce(aa.auth_type, 'none') as auth_type,
+             aa.token_env, aa.username_env, aa.password_env, aa.two_fa_notes,
+             coalesce(aa.enabled, true) as enabled
+      from apps a
+      left join app_auth aa on aa.app_id = a.id
+      order by a.created_at desc
+    `);
+    return json(200, { apps: res.rows });
+  }
+
+  if (path === '/apps' && method === 'POST') {
+    const body = appSchema.parse(parseBody());
+    const id = uuidv4();
+    const res = await query(
+      `insert into apps(id,name,base_url,created_at,updated_at)
+       values($1,$2,$3,now(),now())
+       returning *`,
+      [id, body.name, body.base_url]
+    );
+    await query(`insert into app_auth(app_id,auth_type,enabled) values($1,'none',true) on conflict do nothing`, [id]);
+    return json(200, res.rows[0]);
+  }
+
+  const appMatch = path.match(/^\/apps\/([^/]+)(?:\/(auth|export))?$/);
+  if (appMatch) {
+    const appId = appMatch[1];
+    const action = appMatch[2];
+
+    if (!action && method === 'GET') {
+      const res = await query(`
+        select a.id, a.name, a.base_url, a.created_at, a.updated_at,
+               coalesce(aa.auth_type, 'none') as auth_type,
+               aa.token_env, aa.username_env, aa.password_env, aa.two_fa_notes,
+               coalesce(aa.enabled, true) as enabled
+        from apps a left join app_auth aa on aa.app_id=a.id where a.id=$1`,
+      [appId]);
+      if (!res.rows[0]) return err(404, 'not found');
+      return json(200, res.rows[0]);
+    }
+
+    if (!action && method === 'PUT') {
+      const body = appSchema.partial().parse(parseBody());
+      const existing = await query('select * from apps where id=$1', [appId]);
+      if (!existing.rows[0]) return err(404, 'not found');
+      const next = { ...existing.rows[0], ...body };
+      const updated = await query('update apps set name=$2, base_url=$3, updated_at=now() where id=$1 returning *', [appId, next.name, next.base_url]);
+      return json(200, updated.rows[0]);
+    }
+
+    if (action === 'auth' && method === 'PUT') {
+      const body = appAuthSchema.parse(parseBody());
+      validateEnvName(body.token_env ?? null);
+      validateEnvName(body.username_env ?? null);
+      validateEnvName(body.password_env ?? null);
+      await query(
+        `insert into app_auth(app_id,auth_type,token_env,username_env,password_env,two_fa_notes,enabled)
+         values($1,$2,$3,$4,$5,$6,$7)
+         on conflict (app_id) do update set
+           auth_type=excluded.auth_type,
+           token_env=excluded.token_env,
+           username_env=excluded.username_env,
+           password_env=excluded.password_env,
+           two_fa_notes=excluded.two_fa_notes,
+           enabled=excluded.enabled`,
+        [appId, body.auth_type, body.token_env ?? null, body.username_env ?? null, body.password_env ?? null, body.two_fa_notes ?? null, body.enabled ?? true]
+      );
+      return json(200, { ok: true });
+    }
+
+    if (action === 'export' && method === 'GET') {
+      const res = await query(`
+        select a.id, a.base_url,
+               json_build_object(
+                 'auth_type', coalesce(aa.auth_type, 'none'),
+                 'token_env', aa.token_env,
+                 'username_env', aa.username_env,
+                 'password_env', aa.password_env,
+                 'two_fa_notes', aa.two_fa_notes
+               ) as auth
+        from apps a left join app_auth aa on aa.app_id = a.id
+        where a.id=$1`,
+      [appId]);
+      if (!res.rows[0]) return err(404, 'not found');
+      return json(200, res.rows[0]);
+    }
+  }
+
+  // steps + approvals
+  if (path === '/task_steps' && method === 'POST') {
+    const body = stepSchema.parse(parseBody());
+    const inserted = await query(
+      `insert into task_steps(task_id, kind, message, data)
+       values($1,$2,$3,$4::jsonb)
+       returning id, task_id as "taskId", ts, kind, message, data`,
+      [body.task_id, body.kind, body.message, JSON.stringify(body.data || {})]
+    );
+    return json(200, inserted.rows[0]);
+  }
+
+  if (path === '/task_steps' && method === 'GET') {
+    const taskId = qs.get('taskId');
+    const sinceId = Number(qs.get('sinceId') || '0');
+    const limit = Math.min(Number(qs.get('limit') || '200'), 1000);
+    if (!taskId) return json(200, { steps: [] });
+    const res = await query(
+      `select id, task_id as "taskId", ts, kind, message, data
+       from task_steps where task_id=$1 and id > $2 order by id asc limit $3`,
+      [taskId, sinceId, limit]
+    );
+    return json(200, { steps: res.rows });
+  }
+
+  if (path === '/approvals' && method === 'POST') {
+    const body = approvalCreateSchema.parse(parseBody());
+    const res = await query(
+      `insert into approvals(task_id,status,reason,proposed_actions,created_at,updated_at)
+       values($1,$2,$3,$4::jsonb,now(),now()) returning *`,
+      [body.task_id, body.status, body.reason, JSON.stringify(body.proposed_actions || [])]
+    );
+    return json(200, res.rows[0]);
+  }
+
   const state = await loadState();
   releaseExpiredLeases(state.tasks);
 
@@ -107,7 +274,14 @@ export const handler: Handler = async (event) => {
     const action = taskMatch[2];
     const task = state.tasks.find((t) => t.id === taskId);
     if (!task) return err(404, 'not found');
-    if (!action && method === 'GET') return { statusCode: 200, body: JSON.stringify(task) };
+    if (!action && method === 'GET') {
+      const [stepsRes, approvalsRes, artifactsRes] = await Promise.all([
+        query('select id, task_id as "taskId", ts, kind, message, data from task_steps where task_id=$1 order by id asc', [taskId]),
+        query('select * from approvals where task_id=$1 order by id asc', [taskId]),
+        query('select id, task_id as "taskId", artifact_id as "artifactId", type, mime, note, created_at as "createdAt", metadata from task_artifacts where task_id=$1 order by id desc', [taskId])
+      ]);
+      return json(200, { ...task, steps: stepsRes.rows, approvals: approvalsRes.rows, artifacts: artifactsRes.rows.map((r: any) => ({ ...r, ...r.metadata })) });
+    }
 
     if (action === 'claim' && method === 'POST') {
       const body = claimSchema.parse(parseBody());
@@ -132,7 +306,7 @@ export const handler: Handler = async (event) => {
         [task.id, body.id, body.type, body.status, JSON.stringify(body.payload || {})]
       );
       await saveState(state);
-      return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+      return { statusCode: 200, body: JSON.stringify(body) };
     }
 
     if (action === 'heartbeat' && method === 'POST') {
@@ -162,7 +336,7 @@ export const handler: Handler = async (event) => {
       task.error = body.error;
       task.lease = undefined;
       if (body.needsManual) {
-        task.pendingActions.push({ id: uuidv4(), type: 'RESUME_AFTER_MANUAL', payload: { instructions: 'Complete Instagram challenge in local browser and tap resume.' }, status: 'PENDING' });
+        task.pendingActions.push({ id: uuidv4(), type: 'RESUME_AFTER_MANUAL', payload: { instructions: 'Complete challenge in local browser and tap resume.' }, status: 'PENDING' });
       }
       task.updatedAt = nowIso();
       await saveState(state);
@@ -170,22 +344,30 @@ export const handler: Handler = async (event) => {
     }
 
     if ((action === 'approve' || action === 'deny') && method === 'POST') {
-      const body = approvalSchema.parse(parseBody());
-      const pending = task.pendingActions.find((a) => a.id === body.actionId);
-      if (!pending) return err(404, 'action not found');
-      pending.status = action === 'approve' ? 'APPROVED' : 'DENIED';
-      if (pending.type === 'RESUME_AFTER_MANUAL') {
-        task.status = pending.status === 'APPROVED' ? 'PENDING' : 'FAILED';
-      } else {
-        task.status = task.status === 'NEEDS_MANUAL' ? 'NEEDS_MANUAL' : 'RUNNING';
+      const parsed = z.object({ actionId: z.string().optional() }).parse(parseBody());
+      if (parsed.actionId) {
+        const pending = task.pendingActions.find((a) => a.id === parsed.actionId);
+        if (!pending) return err(404, 'action not found');
+        pending.status = action === 'approve' ? 'APPROVED' : 'DENIED';
+        task.status = pending.status === 'APPROVED' ? 'RUNNING' : 'FAILED';
+        task.updatedAt = nowIso();
+        await query(`update task_approvals set status=$1, updated_at=now() where task_id=$2 and action_id=$3`, [pending.status, task.id, pending.id]);
+        await saveState(state);
+        return { statusCode: 200, body: JSON.stringify({ ok: true }) };
       }
-      task.updatedAt = nowIso();
-      await query(
-        `update task_approvals set status=$1, updated_at=now() where task_id=$2 and action_id=$3`,
-        [pending.status, task.id, pending.id]
-      );
-      await saveState(state);
-      return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+
+      const res = await query(`
+        update approvals set status=$1, updated_at=now()
+        where id = (
+          select id from approvals where task_id=$2 and status='pending' order by id asc limit 1
+        )
+        returning *`, [action === 'approve' ? 'approved' : 'denied', taskId]);
+      if (!res.rows[0]) return err(404, 'no pending approval');
+      return json(200, { ok: true, approval: res.rows[0] });
+    }
+
+    if ((action === 'approve' || action === 'deny') && method === 'GET') {
+      return err(405, 'method not allowed');
     }
   }
 
@@ -267,9 +449,6 @@ export const handler: Handler = async (event) => {
 
   if (path === '/email/digest' && method === 'GET') return { statusCode: 200, body: JSON.stringify(state.emailDigest) };
   if (path === '/email/digest' && method === 'POST') { state.emailDigest = parseBody(); await saveState(state); return { statusCode: 200, body: JSON.stringify({ ok: true }) }; }
-
-  if (path === '/apps' && method === 'GET') return { statusCode: 200, body: JSON.stringify({ apps: state.apps }) };
-  if (path === '/apps' && method === 'POST') { state.apps = parseBody().apps || []; await saveState(state); return { statusCode: 200, body: JSON.stringify({ ok: true }) }; }
 
   return { statusCode: 404, body: JSON.stringify({ error: 'not found' }) };
 };
