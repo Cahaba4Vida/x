@@ -22,9 +22,6 @@ class CockpitClient:
         r.raise_for_status()
         return r.json()['tasks']
 
-    def list_pending_tasks(self):
-        return self.list_tasks(status='PENDING')
-
     def claim_task(self, task_id):
         r = self.http.post(f'{self.base_url}/api/tasks/{task_id}/claim', json={'runnerId': self.runner_id}, headers=self._headers())
         if r.status_code >= 400:
@@ -69,3 +66,29 @@ class CockpitClient:
             content=jpeg_bytes,
             headers={**self._headers(), 'Content-Type': 'image/jpeg'}
         ).raise_for_status()
+
+    def list_apps(self):
+        r = self.http.get(f'{self.base_url}/api/apps', headers=self._headers())
+        r.raise_for_status()
+        return r.json().get('apps', [])
+
+    def export_app(self, app_id: str):
+        r = self.http.get(f'{self.base_url}/api/apps/{app_id}/export', headers=self._headers())
+        r.raise_for_status()
+        return r.json()
+
+    def add_task_step(self, task_id: str, kind: str, message: str, data: dict | None = None):
+        self.http.post(
+            f'{self.base_url}/api/task_steps',
+            json={'task_id': task_id, 'kind': kind, 'message': message, 'data': data or {}},
+            headers=self._headers()
+        ).raise_for_status()
+
+    def create_approval(self, task_id: str, reason: str, proposed_actions: list | None = None):
+        r = self.http.post(
+            f'{self.base_url}/api/approvals',
+            json={'task_id': task_id, 'reason': reason, 'proposed_actions': proposed_actions or []},
+            headers=self._headers()
+        )
+        r.raise_for_status()
+        return r.json()

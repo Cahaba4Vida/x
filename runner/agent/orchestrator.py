@@ -26,7 +26,8 @@ class Orchestrator:
             'INSTAGRAM_POST': ('instagram_tool', {'mode': 'post', **args}),
             'INSTAGRAM_COMMENT_MOD': ('instagram_tool', {'mode': 'comment_mod', **args}),
             'WEBAPP_INSIGHTS': ('netlify_app_insights_tool', {'mode': 'insights', **args}),
-            'WEBAPP_SMOKE_TEST': ('netlify_app_insights_tool', {'mode': 'smoke', **args})
+            'WEBAPP_SMOKE_TEST': ('netlify_app_insights_tool', {'mode': 'smoke', **args}),
+            'WEBAPP_INSTRUCTION': ('playwright_tool', {'mode': 'instruction', **args})
         }
         if task_type not in handlers:
             raise ValueError(f'Unsupported task type: {task_type}')

@@ -6,22 +6,23 @@ import { Task } from '../types';
 export function TaskPage() {
   const { id = '' } = useParams();
   const [task, setTask] = useState<Task>();
-  const [logs, setLogs] = useState<Array<Record<string, unknown>>>([]);
+  const [steps, setSteps] = useState<Array<Record<string, unknown>>>([]);
   const [artifacts, setArtifacts] = useState<Array<Record<string, unknown>>>([]);
   const [watchSrc, setWatchSrc] = useState('');
   const sinceIdRef = useRef(0);
 
   const loadTaskAndArtifacts = async () => {
-    setTask(await api.getTask(id));
+    const loadedTask = await api.getTask(id);
+    setTask(loadedTask);
     setArtifacts((await api.getArtifacts(id)).artifacts);
   };
 
-  const loadLogsDelta = async () => {
-    const delta = await api.getLogs(id, sinceIdRef.current, 200);
-    if (!delta.logs.length) return;
-    const maxId = delta.logs.reduce((m, l) => Math.max(m, Number(l.id || 0)), sinceIdRef.current);
+  const loadStepsDelta = async () => {
+    const delta = await api.getSteps(id, sinceIdRef.current, 200);
+    if (!delta.steps.length) return;
+    const maxId = delta.steps.reduce((m, l: any) => Math.max(m, Number(l.id || 0)), sinceIdRef.current);
     sinceIdRef.current = maxId;
-    setLogs((prev) => [...prev, ...delta.logs].slice(-500));
+    setSteps((prev) => [...prev, ...delta.steps].slice(-500));
   };
 
   const loadWatch = async () => {
@@ -43,32 +44,31 @@ export function TaskPage() {
 
   useEffect(() => {
     sinceIdRef.current = 0;
-    setLogs([]);
+    setSteps([]);
     loadTaskAndArtifacts();
-    loadLogsDelta();
+    loadStepsDelta();
     loadWatch();
 
     const detailsPoll = setInterval(loadTaskAndArtifacts, 5000);
-    const logsPoll = setInterval(loadLogsDelta, 1500);
+    const stepsPoll = setInterval(loadStepsDelta, 1500);
     const screenshotPoll = setInterval(loadWatch, 4000);
 
     return () => {
       clearInterval(detailsPoll);
-      clearInterval(logsPoll);
+      clearInterval(stepsPoll);
       clearInterval(screenshotPoll);
       setWatchSrc((old) => {
         if (old) URL.revokeObjectURL(old);
         return '';
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   if (!task) return <div>Loading...</div>;
 
   return <div style={{ padding: 12 }}>
     <h2>{task.type} / {task.status}</h2>
-    {task.status === 'NEEDS_MANUAL' && <p><b>Manual takeover required:</b> open Instagram in the runner's non-headless browser, complete challenge, then approve RESUME_AFTER_MANUAL.</p>}
+    {task.type === 'WEBAPP_INSTRUCTION' && <p><b>Instruction:</b> {String(task.args.instructionText || '')}</p>}
     <pre>{JSON.stringify(task.result ?? task.error ?? task.args, null, 2)}</pre>
 
     <h3>Watch</h3>
@@ -76,14 +76,15 @@ export function TaskPage() {
       {watchSrc ? <img src={watchSrc} alt="latest watch screenshot" style={{ width: '100%', maxWidth: 480, borderRadius: 8 }} /> : <div>No live screenshot yet.</div>}
     </div>
 
-    <h3>Pending Actions</h3>
-    {task.pendingActions.map((a) => <div key={a.id}><code>{a.type}</code> {a.status}
-      <button onClick={() => api.approve(id, a.id).then(loadTaskAndArtifacts)}>Approve</button>
-      <button onClick={() => api.deny(id, a.id).then(loadTaskAndArtifacts)}>Deny</button>
+    <h3>Approvals</h3>
+    {(task.approvals || []).map((a: any) => <div key={a.id}><code>{a.reason}</code> {a.status}
+      <button onClick={() => api.approveTask(id).then(loadTaskAndArtifacts)}>Approve</button>
+      <button onClick={() => api.denyTask(id).then(loadTaskAndArtifacts)}>Deny</button>
     </div>)}
+
     <h3>Artifacts</h3>
     <pre>{JSON.stringify(artifacts, null, 2)}</pre>
-    <h3>Logs (live)</h3>
-    <pre>{JSON.stringify(logs, null, 2)}</pre>
+    <h3>Steps (live)</h3>
+    <pre>{JSON.stringify(steps, null, 2)}</pre>
   </div>;
 }
