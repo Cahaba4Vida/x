@@ -8,3 +8,6 @@ runner/oauth_token.json
 runner/local_data/
 dist/
 playwright-report/
+
+local_data/
+cockpit-local/node_modules/

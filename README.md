@@ -192,3 +192,80 @@ d) Verify task completes and end-of-run artifacts are listed in Artifacts sectio
 - Persistence is Neon Postgres (`DATABASE_URL`) only.
 - Artifact metadata is stored in `task_artifacts`; watch thumbnails are latest-only bytes in `task_watch_latest`.
 - Artifacts for WEBAPP tasks are stored as metadata only; live screenshots are served from `task_watch_latest`.
+
+## Local Quickstart (Option 2: screenshot-driven local web agent)
+
+This repo now includes `cockpit-local/`, a **local-only** web automation stack with no per-app preprogrammed smoke schema.
+
+### What it includes
+
+- Local Node server (`cockpit-local/server/index.js`) with SQLite + disk screenshots.
+- Local React UI (`cockpit-local/ui`) for Apps, Task Creator, Task Detail (logs, screenshot polling, approvals).
+- Observe → decide → act runner loop using:
+  - Playwright for deterministic browser actions.
+  - OpenAI Responses API for screenshot reasoning with strict JSON action schema.
+- Approval gate for destructive actions (`requestApproval` + server-side guard).
+
+### Local data paths
+
+- SQLite DB: `./local_data/state.db`
+- Screenshots: `./local_data/screenshots/<taskId>/<step>.jpg`
+- Browser profiles: `./local_data/profiles/<appId>/`
+
+### 1) Install + run (Windows PowerShell)
+
+```powershell
+cd cockpit-local
+npm install
+npx playwright install chromium
+npm run dev
+```
+
+- UI: `http://localhost:5174`
+- API: `http://localhost:8787`
+
+### 2) Set environment variables (Windows)
+
+```powershell
+setx OPENAI_API_KEY "your-openai-key"
+setx OPENAI_MODEL "gpt-4.1-mini"
+setx ZINVESTZ_ADMIN_TOKEN "your-zinvestz-admin-token"
+```
+
+Open a **new PowerShell window** after `setx` so variables are available.
+
+### 3) Add app in UI
+
+- Name: `zinvestz`
+- Base URL: `https://zinvestz.netlify.app`
+- Auth type: `token`
+- Token env: `ZINVESTZ_ADMIN_TOKEN`
+
+### 4) Create task in UI
+
+Use instruction text:
+
+```text
+Open the app. If prompted for admin token, enter the token and submit. Then scroll to Add Position. Add positions:
+- AAPL shares 10 avg cost 150
+- TSLA shares 2 avg cost 180
+Click Add Position for each. Then refresh the page and confirm both positions are still present in the portfolio list/table. If successful, finish.
+```
+
+### API surface (local)
+
+- `POST /api/apps`
+- `GET /api/apps`
+- `PUT /api/apps/:id`
+- `POST /api/tasks`
+- `GET /api/tasks`
+- `GET /api/tasks/:id`
+- `POST /api/tasks/:id/approve`
+- `POST /api/tasks/:id/cancel`
+- `GET /api/tasks/:id/screenshot`
+
+### Local secret storage warning
+
+- Preferred: store secret values in OS env vars and reference by env key (`tokenEnv`, `usernameEnv`, `passwordEnv`).
+- Allowed for local development only: direct values (`tokenValue` / `passwordValue`) in app config.
+- Current implementation does **not** provide full production-grade encryption; treat local machine access as trusted.
