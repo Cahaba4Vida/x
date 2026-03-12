@@ -1,0 +1,4 @@
+-- Optional: create one bot manually after you sign in through the UI.
+-- Example:
+-- insert into bots (id, organization_id, name, status)
+-- values (gen_random_uuid(), 'YOUR_ORG_ID', 'Main Bot', 'offline');
